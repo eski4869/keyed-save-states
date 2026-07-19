@@ -3,4 +3,4 @@ obj/
 *.user
 *.suo
 .vs/
-keyed_save_states.tsv
+keyed_save_states/

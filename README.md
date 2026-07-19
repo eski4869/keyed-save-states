@@ -22,14 +22,26 @@ save,123456789
 load,123456789
 ```
 
-The key can be a Twitch user id or any short identifier provided by an external tool.
+The key can contain only letters, numbers, `_`, and `-`.
 
-## Data file
+## Data files
 
-The mod writes `keyed_save_states.tsv` next to the mod DLL.
+The mod writes one XML file per key next to the mod DLL.
 
 ```text
-key	screen	x	y
+keyed_save_states/
+  123456789.xml
 ```
 
-`save,{key}` overwrites that key's saved position. `load,{key}` moves the player to the saved position and clears velocity.
+Each file contains one save state:
+
+```xml
+<?xml version="1.0"?>
+<KeyedSaveState>
+  <screen>52</screen>
+  <x>123.45</x>
+  <y>678.90</y>
+</KeyedSaveState>
+```
+
+`save,{key}` overwrites that key's file. `load,{key}` reads only that key's file, moves the player to the saved position, and clears velocity.

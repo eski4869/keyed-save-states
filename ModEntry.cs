@@ -1,19 +1,14 @@
 using System;
-using System.Collections.Generic;
-using System.Globalization;
 using System.IO;
 using System.Reflection;
-using System.Text;
+using System.Xml.Serialization;
 using EntityComponent;
 using JumpKing;
 using JumpKing.API;
 using JumpKing.BodyCompBehaviours;
 using JumpKing.Mods;
 using JumpKing.Player;
-using JumpKing.Util;
-using JumpKing.Util.Tags;
 using Microsoft.Xna.Framework;
-using Microsoft.Xna.Framework.Graphics;
 
 namespace KeyedSaveStates
 {
@@ -36,7 +31,6 @@ namespace KeyedSaveStates
         {
             KeyedSaveStateStore.EnsureLoaded();
             BrokerCommandClient.Register(CommandTarget);
-            KeyedSaveStatesOverlay.EnsureAdded();
 
             PlayerEntity player = EntityManager.instance.Find<PlayerEntity>();
             if (player == null)
@@ -89,14 +83,6 @@ namespace KeyedSaveStates
 
     internal static class KeyedSaveStatesRuntime
     {
-        public static string DisplayText { get; private set; }
-        public static float MessageSeconds { get; private set; }
-
-        public static bool HasDisplay
-        {
-            get { return MessageSeconds > 0f && !string.IsNullOrEmpty(DisplayText); }
-        }
-
         public static void ExecuteCommand(string command)
         {
             string action;
@@ -114,16 +100,6 @@ namespace KeyedSaveStates
             {
                 Load(key);
             }
-        }
-
-        public static void TickMessage(float delta)
-        {
-            if (MessageSeconds <= 0f)
-            {
-                return;
-            }
-
-            MessageSeconds = Math.Max(0f, MessageSeconds - delta);
         }
 
         private static bool TryParseCommand(string command, out string action, out string key)
@@ -150,6 +126,11 @@ namespace KeyedSaveStates
                 return false;
             }
 
+            if (!KeyedSaveStateStore.IsValidKey(key))
+            {
+                return false;
+            }
+
             return true;
         }
 
@@ -158,15 +139,12 @@ namespace KeyedSaveStates
             PlayerEntity player = EntityManager.instance.Find<PlayerEntity>();
             if (player == null)
             {
-                Show("Save failed: no player");
                 return;
             }
 
             KeyedSaveState state = KeyedSaveState.FromPlayer(key, player);
-            KeyedSaveStateStore.Set(state);
-            KeyedSaveStateStore.Save();
+            KeyedSaveStateStore.SaveState(state);
             PlaySaveSound();
-            Show("Saved: " + key);
         }
 
         private static void Load(string key)
@@ -174,14 +152,12 @@ namespace KeyedSaveStates
             PlayerEntity player = EntityManager.instance.Find<PlayerEntity>();
             if (player == null)
             {
-                Show("Load failed: no player");
                 return;
             }
 
             KeyedSaveState state;
-            if (!KeyedSaveStateStore.TryGet(key, out state))
+            if (!KeyedSaveStateStore.TryLoad(key, out state))
             {
-                Show("No save: " + key);
                 return;
             }
 
@@ -189,13 +165,6 @@ namespace KeyedSaveStates
             player.m_body.Velocity = Vector2.Zero;
             JumpKing.Camera.UpdateCamera(player.m_body.GetHitbox().Center);
             PlayLoadSound();
-            Show("Loaded: " + key);
-        }
-
-        private static void Show(string text)
-        {
-            DisplayText = text;
-            MessageSeconds = 2f;
         }
 
         private static void PlaySaveSound()
@@ -236,72 +205,59 @@ namespace KeyedSaveStates
 
     internal static class KeyedSaveStateStore
     {
-        private const string StateFileName = "keyed_save_states.tsv";
+        private const string StateDirectoryName = "keyed_save_states";
         private static readonly object Sync = new object();
-        private static readonly Dictionary<string, KeyedSaveState> States = new Dictionary<string, KeyedSaveState>(StringComparer.OrdinalIgnoreCase);
-        private static bool _loaded;
-        private static string _statePath;
+        private static string _stateDirectory;
 
         public static void EnsureLoaded()
         {
             lock (Sync)
             {
-                EnsureStatePath();
+                EnsureStateDirectory();
+            }
+        }
 
-                if (_loaded)
+        public static bool IsValidKey(string key)
+        {
+            if (string.IsNullOrEmpty(key) || key.Length > 64)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < key.Length; i++)
+            {
+                char c = key[i];
+                if ((c >= 'a' && c <= 'z') ||
+                    (c >= 'A' && c <= 'Z') ||
+                    (c >= '0' && c <= '9') ||
+                    c == '_' ||
+                    c == '-')
                 {
-                    return;
+                    continue;
                 }
 
-                Load();
-                _loaded = true;
+                return false;
             }
+
+            return true;
         }
 
-        public static void Set(KeyedSaveState state)
+        public static void SaveState(KeyedSaveState state)
         {
             EnsureLoaded();
 
             lock (Sync)
             {
-                States[state.Key] = state;
-            }
-        }
-
-        public static bool TryGet(string key, out KeyedSaveState state)
-        {
-            EnsureLoaded();
-
-            lock (Sync)
-            {
-                return States.TryGetValue(key, out state);
-            }
-        }
-
-        public static void Save()
-        {
-            lock (Sync)
-            {
-                EnsureStatePath();
-
                 try
                 {
-                    var sb = new StringBuilder();
-                    sb.AppendLine("key\tscreen\tx\ty");
+                    string path = GetStatePath(state.Key);
+                    var serializer = new XmlSerializer(typeof(KeyedSaveStateXml));
+                    var data = KeyedSaveStateXml.FromState(state);
 
-                    foreach (KeyedSaveState state in States.Values)
+                    using (var stream = File.Create(path))
                     {
-                        sb.AppendLine(string.Format(
-                            CultureInfo.InvariantCulture,
-                            "{0}\t{1}\t{2}\t{3}",
-                            EscapeKey(state.Key),
-                            state.Screen,
-                            state.Position.X,
-                            state.Position.Y
-                        ));
+                        serializer.Serialize(stream, data);
                     }
-
-                    File.WriteAllText(_statePath, sb.ToString(), new UTF8Encoding(false));
                 }
                 catch (Exception ex)
                 {
@@ -310,51 +266,60 @@ namespace KeyedSaveStates
             }
         }
 
-        private static void Load()
+        public static bool TryLoad(string key, out KeyedSaveState state)
         {
-            States.Clear();
+            state = new KeyedSaveState();
+            EnsureLoaded();
 
-            try
+            lock (Sync)
             {
-                if (!File.Exists(_statePath))
+                try
                 {
-                    return;
-                }
-
-                string[] lines = File.ReadAllLines(_statePath);
-                for (int i = 1; i < lines.Length; i++)
-                {
-                    KeyedSaveState state;
-                    if (KeyedSaveState.TryParse(lines[i], out state))
+                    string path = GetStatePath(key);
+                    if (!File.Exists(path))
                     {
-                        States[state.Key] = state;
+                        return false;
+                    }
+
+                    var serializer = new XmlSerializer(typeof(KeyedSaveStateXml));
+                    using (var stream = File.OpenRead(path))
+                    {
+                        var data = (KeyedSaveStateXml)serializer.Deserialize(stream);
+                        if (data == null)
+                        {
+                            return false;
+                        }
+
+                        state = data.ToState(key);
+                        return true;
                     }
                 }
-            }
-            catch (Exception ex)
-            {
-                JumpKing.Program.crashLog.AddErrorMessage("KeyedSaveStates load failed: " + ex.Message);
+                catch (Exception ex)
+                {
+                    JumpKing.Program.crashLog.AddErrorMessage("KeyedSaveStates load failed: " + ex.Message);
+                    return false;
+                }
             }
         }
 
-        private static void EnsureStatePath()
+        private static string GetStatePath(string key)
         {
-            if (!string.IsNullOrEmpty(_statePath))
-            {
-                return;
-            }
-
-            string assemblyPath = typeof(ModEntry).Assembly.Location;
-            string directory = Path.GetDirectoryName(assemblyPath);
-            _statePath = Path.Combine(directory, StateFileName);
+            EnsureStateDirectory();
+            return Path.Combine(_stateDirectory, key + ".xml");
         }
 
-        private static string EscapeKey(string key)
+        private static void EnsureStateDirectory()
         {
-            return key.Replace("\t", " ").Replace("\r", " ").Replace("\n", " ");
+            if (string.IsNullOrEmpty(_stateDirectory))
+            {
+                string assemblyPath = typeof(ModEntry).Assembly.Location;
+                string directory = Path.GetDirectoryName(assemblyPath);
+                _stateDirectory = Path.Combine(directory, StateDirectoryName);
+            }
+
+            Directory.CreateDirectory(_stateDirectory);
         }
     }
-
     internal struct KeyedSaveState
     {
         public string Key;
@@ -371,143 +336,40 @@ namespace KeyedSaveStates
             };
         }
 
-        public static bool TryParse(string line, out KeyedSaveState state)
-        {
-            state = new KeyedSaveState();
-
-            if (string.IsNullOrWhiteSpace(line))
-            {
-                return false;
-            }
-
-            string[] parts = line.Split('\t');
-            if (parts.Length != 4)
-            {
-                return false;
-            }
-
-            int screen;
-            float x;
-            float y;
-
-            if (!int.TryParse(parts[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out screen) ||
-                !float.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out x) ||
-                !float.TryParse(parts[3], NumberStyles.Float, CultureInfo.InvariantCulture, out y))
-            {
-                return false;
-            }
-
-            state = new KeyedSaveState
-            {
-                Key = parts[0],
-                Screen = screen,
-                Position = new Vector2(x, y)
-            };
-
-            return state.Key.Length > 0;
-        }
     }
 
-    public sealed class KeyedSaveStatesOverlay : Entity, IForeground
+    [XmlRoot("KeyedSaveState")]
+    public class KeyedSaveStateXml
     {
-        private static KeyedSaveStatesOverlay _instance;
-        private Texture2D _pixel;
+        [XmlElement("screen")]
+        public int Screen { get; set; }
 
-        public static void EnsureAdded()
+        [XmlElement("x")]
+        public float X { get; set; }
+
+        [XmlElement("y")]
+        public float Y { get; set; }
+
+        internal static KeyedSaveStateXml FromState(KeyedSaveState state)
         {
-            if (EntityManager.instance == null)
+            return new KeyedSaveStateXml
             {
-                return;
-            }
-
-            if (_instance != null && _instance.IsAlive)
-            {
-                return;
-            }
-
-            _instance = new KeyedSaveStatesOverlay();
-            EntityManager.instance.AddObject(_instance);
+                Screen = state.Screen,
+                X = state.Position.X,
+                Y = state.Position.Y
+            };
         }
 
-        protected override void Update(float delta)
+        internal KeyedSaveState ToState(string key)
         {
-            KeyedSaveStatesRuntime.TickMessage(delta);
-        }
-
-        public void ForegroundDraw()
-        {
-            if (!KeyedSaveStatesRuntime.HasDisplay)
+            return new KeyedSaveState
             {
-                return;
-            }
-
-            EnsurePixel();
-
-            SpriteFont font = GetFont();
-            if (font == null)
-            {
-                return;
-            }
-
-            string text = KeyedSaveStatesRuntime.DisplayText;
-            Vector2 size = font.MeasureString(text);
-            int paddingX = 8;
-            int paddingY = 5;
-            int width = (int)Math.Ceiling(size.X) + paddingX * 2;
-            int height = (int)Math.Ceiling(size.Y) + paddingY * 2;
-            int x = 480 - width - 10;
-            int y = 10;
-
-            Game1.spriteBatch.Draw(_pixel, new Rectangle(x, y, width, height), new Color((byte)0, (byte)0, (byte)0, (byte)185));
-            Game1.spriteBatch.Draw(_pixel, new Rectangle(x, y, width, 1), Color.Gray);
-            Game1.spriteBatch.Draw(_pixel, new Rectangle(x, y + height - 1, width, 1), Color.Gray);
-            Game1.spriteBatch.Draw(_pixel, new Rectangle(x, y, 1, height), Color.Gray);
-            Game1.spriteBatch.Draw(_pixel, new Rectangle(x + width - 1, y, 1, height), Color.Gray);
-
-            TextHelper.DrawString(font, text, new Vector2(x + paddingX, y + paddingY), Color.White, Vector2.Zero, true);
-        }
-
-        protected override void OnDestroy()
-        {
-            if (_pixel != null)
-            {
-                _pixel.Dispose();
-                _pixel = null;
-            }
-
-            if (ReferenceEquals(_instance, this))
-            {
-                _instance = null;
-            }
-        }
-
-        private void EnsurePixel()
-        {
-            if (_pixel != null || Game1.instance == null)
-            {
-                return;
-            }
-
-            _pixel = new Texture2D(Game1.instance.GraphicsDevice, 1, 1);
-            _pixel.SetData(new[] { Color.White });
-        }
-
-        private static SpriteFont GetFont()
-        {
-            if (Game1.instance == null || Game1.instance.contentManager == null)
-            {
-                return null;
-            }
-
-            if (Game1.instance.contentManager.font.MenuFontSmall != null)
-            {
-                return Game1.instance.contentManager.font.MenuFontSmall;
-            }
-
-            return Game1.instance.contentManager.font.MenuFont;
+                Key = key,
+                Screen = Screen,
+                Position = new Vector2(X, Y)
+            };
         }
     }
-
     internal static class BrokerCommandClient
     {
         private const string RegistryTypeName = "JumpKingHttpCommandBroker.CommandQueueRegistry";
