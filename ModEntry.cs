@@ -142,7 +142,17 @@ namespace KeyedSaveStates
                 return;
             }
 
-            KeyedSaveState state = KeyedSaveState.FromPlayer(key, player);
+            string levelName;
+            if (!LevelNameResolver.TryGetCurrentLevelName(out levelName))
+            {
+                return;
+            }
+
+            KeyedSaveState state = KeyedSaveState.FromPlayer(
+                key,
+                levelName,
+                player
+            );
             KeyedSaveStateStore.SaveState(state);
             PlaySaveSound();
         }
@@ -155,8 +165,14 @@ namespace KeyedSaveStates
                 return;
             }
 
+            string levelName;
+            if (!LevelNameResolver.TryGetCurrentLevelName(out levelName))
+            {
+                return;
+            }
+
             KeyedSaveState state;
-            if (!KeyedSaveStateStore.TryLoad(key, out state))
+            if (!KeyedSaveStateStore.TryLoad(key, levelName, out state))
             {
                 return;
             }
@@ -199,6 +215,57 @@ namespace KeyedSaveStates
             }
             catch
             {
+            }
+        }
+    }
+
+    internal static class LevelNameResolver
+    {
+        public static bool TryGetCurrentLevelName(out string levelName)
+        {
+            levelName = null;
+
+            try
+            {
+                object contentManager = Game1.instance.contentManager;
+                FieldInfo rootField = contentManager.GetType().GetField(
+                    "root",
+                    BindingFlags.Instance |
+                    BindingFlags.Public |
+                    BindingFlags.NonPublic
+                );
+                string root = rootField.GetValue(contentManager) as string;
+
+                if (root == "Content")
+                {
+                    levelName = "Main Babe";
+                    return true;
+                }
+
+                FieldInfo levelField = contentManager.GetType().GetField(
+                    "level",
+                    BindingFlags.Instance |
+                    BindingFlags.Public |
+                    BindingFlags.NonPublic
+                );
+                JumpKing.Workshop.Level level =
+                    levelField.GetValue(contentManager) as
+                    JumpKing.Workshop.Level;
+
+                if (level != null)
+                {
+                    levelName = level.Name;
+                    return !string.IsNullOrWhiteSpace(levelName);
+                }
+
+                return false;
+            }
+            catch (Exception ex)
+            {
+                JumpKing.Program.crashLog.AddErrorMessage(
+                    "KeyedSaveStates level name failed: " + ex.Message
+                );
+                return false;
             }
         }
     }
@@ -250,10 +317,11 @@ namespace KeyedSaveStates
             {
                 try
                 {
-                    string path = GetStatePath(state.Key);
+                    string path = GetStatePath(state.LevelName, state.Key);
                     var serializer = new XmlSerializer(typeof(KeyedSaveStateXml));
                     var data = KeyedSaveStateXml.FromState(state);
 
+                    Directory.CreateDirectory(Path.GetDirectoryName(path));
                     using (var stream = File.Create(path))
                     {
                         serializer.Serialize(stream, data);
@@ -266,7 +334,11 @@ namespace KeyedSaveStates
             }
         }
 
-        public static bool TryLoad(string key, out KeyedSaveState state)
+        public static bool TryLoad(
+            string key,
+            string levelName,
+            out KeyedSaveState state
+        )
         {
             state = new KeyedSaveState();
             EnsureLoaded();
@@ -275,7 +347,7 @@ namespace KeyedSaveStates
             {
                 try
                 {
-                    string path = GetStatePath(key);
+                    string path = GetStatePath(levelName, key);
                     if (!File.Exists(path))
                     {
                         return false;
@@ -302,10 +374,45 @@ namespace KeyedSaveStates
             }
         }
 
-        private static string GetStatePath(string key)
+        private static string GetStatePath(string levelName, string key)
         {
             EnsureStateDirectory();
-            return Path.Combine(_stateDirectory, key + ".xml");
+            return Path.Combine(
+                _stateDirectory,
+                EncodeLevelDirectoryName(levelName),
+                key + ".xml"
+            );
+        }
+
+        private static string EncodeLevelDirectoryName(string levelName)
+        {
+            char[] invalid = Path.GetInvalidFileNameChars();
+            var result = new System.Text.StringBuilder();
+            int lastNonTrailing = levelName.TrimEnd(' ', '.').Length;
+
+            for (int i = 0; i < levelName.Length; i++)
+            {
+                char c = levelName[i];
+                bool mustEncode =
+                    c == '%' ||
+                    Array.IndexOf(invalid, c) >= 0 ||
+                    i >= lastNonTrailing;
+
+                if (mustEncode)
+                {
+                    result.Append('%');
+                    result.Append(((int)c).ToString("X4"));
+                }
+                else
+                {
+                    result.Append(c);
+                }
+            }
+
+            string directoryName = result.ToString();
+            return string.IsNullOrEmpty(directoryName)
+                ? "%0000"
+                : directoryName;
         }
 
         private static void EnsureStateDirectory()
@@ -323,14 +430,20 @@ namespace KeyedSaveStates
     internal struct KeyedSaveState
     {
         public string Key;
+        public string LevelName;
         public int Screen;
         public Vector2 Position;
 
-        public static KeyedSaveState FromPlayer(string key, PlayerEntity player)
+        public static KeyedSaveState FromPlayer(
+            string key,
+            string levelName,
+            PlayerEntity player
+        )
         {
             return new KeyedSaveState
             {
                 Key = key,
+                LevelName = levelName,
                 Screen = JumpKing.Camera.CurrentScreen + 1,
                 Position = player.m_body.Position
             };
@@ -341,6 +454,9 @@ namespace KeyedSaveStates
     [XmlRoot("KeyedSaveState")]
     public class KeyedSaveStateXml
     {
+        [XmlElement("level_name")]
+        public string LevelName { get; set; }
+
         [XmlElement("screen")]
         public int Screen { get; set; }
 
@@ -354,6 +470,7 @@ namespace KeyedSaveStates
         {
             return new KeyedSaveStateXml
             {
+                LevelName = state.LevelName,
                 Screen = state.Screen,
                 X = state.Position.X,
                 Y = state.Position.Y
@@ -365,6 +482,7 @@ namespace KeyedSaveStates
             return new KeyedSaveState
             {
                 Key = key,
+                LevelName = LevelName,
                 Screen = Screen,
                 Position = new Vector2(X, Y)
             };
