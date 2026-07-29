@@ -24,6 +24,7 @@ namespace KeyedSaveStates
         {
             KeyedSaveStateStore.EnsureLoaded();
             BrokerCommandClient.Register(CommandTarget);
+            TargetPlayerResolver.ResolveApi();
         }
 
         [OnLevelStart]
@@ -31,6 +32,7 @@ namespace KeyedSaveStates
         {
             KeyedSaveStateStore.EnsureLoaded();
             BrokerCommandClient.Register(CommandTarget);
+            TargetPlayerResolver.ResolveApi();
 
             PlayerEntity player = EntityManager.instance.Find<PlayerEntity>();
             if (player == null)
@@ -70,20 +72,25 @@ namespace KeyedSaveStates
     {
         public bool ExecuteBehaviour(BehaviourContext behaviourContext)
         {
+            string user;
             string command;
-            if (!BrokerCommandClient.TryDequeue(ModEntry.CommandTarget, out command))
+            if (!BrokerCommandClient.TryDequeue(
+                ModEntry.CommandTarget,
+                out user,
+                out command
+            ))
             {
                 return true;
             }
 
-            KeyedSaveStatesRuntime.ExecuteCommand(command);
+            KeyedSaveStatesRuntime.ExecuteCommand(user, command);
             return true;
         }
     }
 
     internal static class KeyedSaveStatesRuntime
     {
-        public static void ExecuteCommand(string command)
+        public static void ExecuteCommand(string user, string command)
         {
             string action;
             string key;
@@ -92,13 +99,19 @@ namespace KeyedSaveStates
                 return;
             }
 
+            PlayerEntity player = TargetPlayerResolver.ResolveSingle(user);
+            if (player == null)
+            {
+                return;
+            }
+
             if (action == "save")
             {
-                Save(key);
+                Save(key, player);
             }
             else if (action == "load")
             {
-                Load(key);
+                Load(key, player);
             }
         }
 
@@ -134,14 +147,8 @@ namespace KeyedSaveStates
             return true;
         }
 
-        private static void Save(string key)
+        private static void Save(string key, PlayerEntity player)
         {
-            PlayerEntity player = EntityManager.instance.Find<PlayerEntity>();
-            if (player == null)
-            {
-                return;
-            }
-
             string levelName;
             if (!LevelNameResolver.TryGetCurrentLevelName(out levelName))
             {
@@ -157,14 +164,8 @@ namespace KeyedSaveStates
             PlaySaveSound();
         }
 
-        private static void Load(string key)
+        private static void Load(string key, PlayerEntity player)
         {
-            PlayerEntity player = EntityManager.instance.Find<PlayerEntity>();
-            if (player == null)
-            {
-                return;
-            }
-
             string levelName;
             if (!LevelNameResolver.TryGetCurrentLevelName(out levelName))
             {
@@ -179,7 +180,10 @@ namespace KeyedSaveStates
 
             player.m_body.Position = state.Position;
             player.m_body.Velocity = Vector2.Zero;
-            JumpKing.Camera.UpdateCamera(player.m_body.GetHitbox().Center);
+            if (TargetPlayerResolver.IsPrimary(player))
+            {
+                JumpKing.Camera.UpdateCamera(player.m_body.GetHitbox().Center);
+            }
             PlayLoadSound();
         }
 
@@ -522,8 +526,13 @@ namespace KeyedSaveStates
             }
         }
 
-        public static bool TryDequeue(string target, out string command)
+        public static bool TryDequeue(
+            string target,
+            out string user,
+            out string command
+        )
         {
+            user = null;
             command = null;
 
             if (!_registered)
@@ -538,9 +547,10 @@ namespace KeyedSaveStates
 
             try
             {
-                object[] args = new object[] { target, null };
+                object[] args = new object[] { target, null, null };
                 bool dequeued = (bool)_tryDequeueMethod.Invoke(_registry, args);
-                command = args[1] as string;
+                user = args[1] as string;
+                command = args[2] as string;
                 return dequeued;
             }
             catch (Exception ex)
@@ -576,7 +586,15 @@ namespace KeyedSaveStates
 
                 FieldInfo instanceField = registryType.GetField("Instance", BindingFlags.Public | BindingFlags.Static);
                 MethodInfo registerMethod = registryType.GetMethod("Register", new Type[] { typeof(string) });
-                MethodInfo tryDequeueMethod = registryType.GetMethod("TryDequeue", new Type[] { typeof(string), typeof(string).MakeByRefType() });
+                MethodInfo tryDequeueMethod = registryType.GetMethod(
+                    "TryDequeue",
+                    new Type[]
+                    {
+                        typeof(string),
+                        typeof(string).MakeByRefType(),
+                        typeof(string).MakeByRefType()
+                    }
+                );
 
                 if (instanceField == null || registerMethod == null || tryDequeueMethod == null)
                 {

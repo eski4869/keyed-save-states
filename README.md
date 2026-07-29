@@ -49,3 +49,12 @@ Each file contains one save state:
 ```
 
 `save,{key}` overwrites that key's file for the current level. `load,{key}` reads the key from the current level only, moves the player to the saved position, and clears velocity.
+
+## Local multiplayer integration
+
+When Local Multiplayer Mod is installed, the Broker request's optional `user`
+selects the target player. The save key remains independent from the user and is
+still the stable storage identifier. A command is ignored when its user resolves
+to zero players or more than one player, because one key stores one player state.
+
+Without Local Multiplayer Mod, commands keep their normal Player 1 behavior.
