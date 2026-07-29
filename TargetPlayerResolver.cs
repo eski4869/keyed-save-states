@@ -10,22 +10,25 @@ namespace KeyedSaveStates
         private const string ApiTypeName =
             "LocalMultiplayerMod.LocalMultiplayerApi";
 
-        private delegate int ResolvePlayerMaskDelegate(string user);
-        private delegate PlayerEntity GetPlayerDelegate(int playerNumber);
+        private delegate PlayerEntity ResolvePlayerDelegate(string user);
 
-        private static bool _resolved;
-        private static ResolvePlayerMaskDelegate _resolvePlayerMask;
-        private static GetPlayerDelegate _getPlayer;
+        private static int _lastResolveAssemblyCount = -1;
+        private static ResolvePlayerDelegate _resolvePlayer;
 
         public static void ResolveApi()
         {
-            if (_resolved)
+            if (_resolvePlayer != null)
             {
                 return;
             }
 
-            _resolved = true;
             Assembly[] assemblies = AppDomain.CurrentDomain.GetAssemblies();
+            if (_lastResolveAssemblyCount == assemblies.Length)
+            {
+                return;
+            }
+
+            _lastResolveAssemblyCount = assemblies.Length;
             for (int i = 0; i < assemblies.Length; i++)
             {
                 Type apiType = assemblies[i].GetType(ApiTypeName, false);
@@ -34,71 +37,37 @@ namespace KeyedSaveStates
                     continue;
                 }
 
-                _resolvePlayerMask = CreateDelegate<ResolvePlayerMaskDelegate>(
-                    apiType,
-                    "ResolvePlayerMask"
+                MethodInfo method = apiType.GetMethod(
+                    "ResolvePlayer",
+                    BindingFlags.Public | BindingFlags.Static
                 );
-                _getPlayer = CreateDelegate<GetPlayerDelegate>(apiType, "GetPlayer");
+                _resolvePlayer = method == null ? null :
+                    Delegate.CreateDelegate(
+                        typeof(ResolvePlayerDelegate),
+                        method,
+                        false
+                    ) as ResolvePlayerDelegate;
                 return;
             }
         }
 
-        public static PlayerEntity ResolveSingle(string user)
+        public static PlayerEntity Resolve(string user)
         {
             ResolveApi();
-            if (_resolvePlayerMask == null || _getPlayer == null)
+            if (_resolvePlayer == null)
             {
                 return EntityManager.instance == null ? null :
                     EntityManager.instance.Find<PlayerEntity>();
             }
 
-            int mask = _resolvePlayerMask(user);
-            int playerNumber = MaskToSinglePlayerNumber(mask);
-            return playerNumber == 0 ? null : _getPlayer(playerNumber);
+            return _resolvePlayer(user);
         }
 
         public static bool IsPrimary(PlayerEntity player)
         {
-            if (player == null)
-            {
-                return false;
-            }
-
-            ResolveApi();
-            PlayerEntity primary = _getPlayer == null
-                ? (EntityManager.instance == null
-                    ? null
-                    : EntityManager.instance.Find<PlayerEntity>())
-                : _getPlayer(1);
-            return ReferenceEquals(player, primary);
-        }
-
-        private static int MaskToSinglePlayerNumber(int mask)
-        {
-            switch (mask)
-            {
-                case 1:
-                    return 1;
-                case 2:
-                    return 2;
-                case 4:
-                    return 3;
-                case 8:
-                    return 4;
-                default:
-                    return 0;
-            }
-        }
-
-        private static T CreateDelegate<T>(Type apiType, string methodName)
-            where T : class
-        {
-            MethodInfo method = apiType.GetMethod(
-                methodName,
-                BindingFlags.Public | BindingFlags.Static
-            );
-            return method == null ? null :
-                Delegate.CreateDelegate(typeof(T), method, false) as T;
+            PlayerEntity primary = EntityManager.instance == null ? null :
+                EntityManager.instance.Find<PlayerEntity>();
+            return player != null && ReferenceEquals(player, primary);
         }
     }
 }
