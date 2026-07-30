@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
 using System.Xml.Serialization;
@@ -72,34 +73,46 @@ namespace KeyedSaveStates
     {
         public bool ExecuteBehaviour(BehaviourContext behaviourContext)
         {
-            string user;
-            string command;
+            IReadOnlyDictionary<string, string> parameters;
             if (!BrokerCommandClient.TryDequeue(
                 ModEntry.CommandTarget,
-                out user,
-                out command
+                out parameters
             ))
             {
                 return true;
             }
 
-            KeyedSaveStatesRuntime.ExecuteCommand(user, command);
+            KeyedSaveStatesRuntime.ExecuteCommand(parameters);
             return true;
         }
     }
 
     internal static class KeyedSaveStatesRuntime
     {
-        public static void ExecuteCommand(string user, string command)
+        public static void ExecuteCommand(
+            IReadOnlyDictionary<string, string> parameters
+        )
         {
+            string user;
             string action;
             string key;
-            if (!TryParseCommand(command, out action, out key))
+            if (parameters == null ||
+                !parameters.TryGetValue("command", out action) ||
+                !parameters.TryGetValue("key", out key))
             {
                 return;
             }
 
-            PlayerEntity player = TargetPlayerResolver.ResolveSingle(user);
+            parameters.TryGetValue("user", out user);
+            action = (action ?? string.Empty).Trim().ToLowerInvariant();
+            key = (key ?? string.Empty).Trim();
+            if ((action != "save" && action != "load") ||
+                !KeyedSaveStateStore.IsValidKey(key))
+            {
+                return;
+            }
+
+            PlayerEntity player = TargetPlayerResolver.Resolve(user);
             if (player == null)
             {
                 return;
@@ -113,38 +126,6 @@ namespace KeyedSaveStates
             {
                 Load(key, player);
             }
-        }
-
-        private static bool TryParseCommand(string command, out string action, out string key)
-        {
-            action = null;
-            key = null;
-
-            if (string.IsNullOrWhiteSpace(command))
-            {
-                return false;
-            }
-
-            string[] parts = command.Split(',');
-            if (parts.Length != 2)
-            {
-                return false;
-            }
-
-            action = parts[0].Trim().ToLowerInvariant();
-            key = parts[1].Trim();
-
-            if ((action != "save" && action != "load") || key.Length == 0)
-            {
-                return false;
-            }
-
-            if (!KeyedSaveStateStore.IsValidKey(key))
-            {
-                return false;
-            }
-
-            return true;
         }
 
         private static void Save(string key, PlayerEntity player)
@@ -499,7 +480,7 @@ namespace KeyedSaveStates
         private static object _registry;
         private static MethodInfo _registerMethod;
         private static MethodInfo _tryDequeueMethod;
-        private static DateTime _nextResolveUtc = DateTime.MinValue;
+        private static int _lastResolveAssemblyCount = -1;
         private static bool _loggedMissingBroker;
         private static bool _registered;
 
@@ -528,12 +509,10 @@ namespace KeyedSaveStates
 
         public static bool TryDequeue(
             string target,
-            out string user,
-            out string command
+            out IReadOnlyDictionary<string, string> parameters
         )
         {
-            user = null;
-            command = null;
+            parameters = null;
 
             if (!_registered)
             {
@@ -547,10 +526,9 @@ namespace KeyedSaveStates
 
             try
             {
-                object[] args = new object[] { target, null, null };
+                object[] args = new object[] { target, null };
                 bool dequeued = (bool)_tryDequeueMethod.Invoke(_registry, args);
-                user = args[1] as string;
-                command = args[2] as string;
+                parameters = args[1] as IReadOnlyDictionary<string, string>;
                 return dequeued;
             }
             catch (Exception ex)
@@ -567,15 +545,13 @@ namespace KeyedSaveStates
                 return true;
             }
 
-            DateTime nowUtc = DateTime.UtcNow;
-            if (nowUtc < _nextResolveUtc)
+            Assembly[] assemblies = AppDomain.CurrentDomain.GetAssemblies();
+            if (_lastResolveAssemblyCount == assemblies.Length)
             {
                 return false;
             }
 
-            _nextResolveUtc = nowUtc.AddSeconds(1);
-
-            Assembly[] assemblies = AppDomain.CurrentDomain.GetAssemblies();
+            _lastResolveAssemblyCount = assemblies.Length;
             for (int i = 0; i < assemblies.Length; i++)
             {
                 Type registryType = assemblies[i].GetType(RegistryTypeName, false);
@@ -591,8 +567,7 @@ namespace KeyedSaveStates
                     new Type[]
                     {
                         typeof(string),
-                        typeof(string).MakeByRefType(),
-                        typeof(string).MakeByRefType()
+                        typeof(IReadOnlyDictionary<string, string>).MakeByRefType()
                     }
                 );
 

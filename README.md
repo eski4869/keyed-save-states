@@ -8,18 +8,11 @@ Keyed Save States stores one named save state per key and level, and executes sa
 keyed_save_states
 ```
 
-## Commands
+## Requests
 
 ```text
-save,{key}
-load,{key}
-```
-
-Examples:
-
-```text
-save,123456789
-load,123456789
+http://127.0.0.1:8081/command?target=keyed_save_states&command=save&key=123456789
+http://127.0.0.1:8081/command?target=keyed_save_states&command=load&key=123456789
 ```
 
 The key can contain only letters, numbers, `_`, and `-`.
@@ -48,13 +41,13 @@ Each file contains one save state:
 </KeyedSaveState>
 ```
 
-`save,{key}` overwrites that key's file for the current level. `load,{key}` reads the key from the current level only, moves the player to the saved position, and clears velocity.
+`command=save` overwrites that key's file for the current level. `command=load` reads the key from the current level only, moves the player to the saved position, and clears velocity.
 
 ## Local multiplayer integration
 
 When Local Multiplayer Mod is installed, the Broker request's optional `user`
 selects the target player. The save key remains independent from the user and is
-still the stable storage identifier. A command is ignored when its user resolves
-to zero players or more than one player, because one key stores one player state.
+still the stable storage identifier. A command is ignored when its user does not
+resolve to a player.
 
 Without Local Multiplayer Mod, commands keep their normal Player 1 behavior.
