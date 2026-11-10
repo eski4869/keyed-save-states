@@ -112,6 +112,18 @@ namespace KeyedSaveStates
                 return;
             }
 
+            int? timeTicks = null;
+            if (action == "load" && AttemptTimer.HasAny(parameters))
+            {
+                int ticks;
+                if (!AttemptTimer.TryParse(parameters, out ticks))
+                {
+                    return;
+                }
+
+                timeTicks = ticks;
+            }
+
             PlayerEntity player = TargetPlayerResolver.Resolve(user);
             if (player == null)
             {
@@ -124,7 +136,7 @@ namespace KeyedSaveStates
             }
             else if (action == "load")
             {
-                Load(key, player);
+                Load(key, player, timeTicks);
             }
         }
 
@@ -145,7 +157,11 @@ namespace KeyedSaveStates
             PlaySaveSound();
         }
 
-        private static void Load(string key, PlayerEntity player)
+        private static void Load(
+            string key,
+            PlayerEntity player,
+            int? timeTicks
+        )
         {
             string levelName;
             if (!LevelNameResolver.TryGetCurrentLevelName(out levelName))
@@ -164,6 +180,10 @@ namespace KeyedSaveStates
             if (TargetPlayerResolver.IsPrimary(player))
             {
                 JumpKing.Camera.UpdateCamera(player.m_body.GetHitbox().Center);
+            }
+            if (timeTicks.HasValue)
+            {
+                AttemptTimer.SetTicks(timeTicks.Value);
             }
             PlayLoadSound();
         }

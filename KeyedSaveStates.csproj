@@ -50,6 +50,7 @@
 		</Reference>
 	</ItemGroup>
 	<ItemGroup>
+		<Compile Include="AttemptTimer.cs" />
 		<Compile Include="ModEntry.cs" />
 		<Compile Include="TargetPlayerResolver.cs" />
 

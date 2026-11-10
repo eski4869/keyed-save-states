@@ -43,6 +43,31 @@ Each file contains one save state:
 
 `command=save` overwrites that key's file for the current level. `command=load` reads the key from the current level only, moves the player to the saved position, and clears velocity.
 
+## Setting the attempt time
+
+`command=load` accepts optional `h`, `m` and `s` (hours, minutes, seconds).
+When any of them is given, the in-game attempt timer is set to their sum when the
+load succeeds. Each may be omitted or have decimals; the total is rounded to the
+nearest frame.
+
+```text
+http://127.0.0.1:8081/command?target=keyed_save_states&command=load&key=123456789&m=1&s=30.5
+http://127.0.0.1:8081/command?target=keyed_save_states&command=load&key=123456789&s=0
+```
+
+If any of `h`, `m` or `s` is not a non-negative number, the whole command does
+nothing.
+The value is independent of the save file, and applies whichever player the
+command targets, because the game keeps one attempt timer.
+
+Like the SaveStates mod's "Include time", this changes only the timer in memory.
+The mod does not write the game's `attempt_stats.stat`. The game itself writes
+the in-memory value there when an attempt is continued from the menu, so the
+change survives a return to the menu, but closing the game before that discards
+it. Wind on
+screens without a fixed direction is derived from this timer, so setting it also
+changes the wind phase.
+
 ## Local multiplayer integration
 
 When Local Multiplayer Mod is installed, the Broker request's optional `user`
